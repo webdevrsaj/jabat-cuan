@@ -151,9 +151,11 @@ if run or search_ticker or enable_auto:
 
     pbar = st.progress(0)
     for i, t in enumerate(target_tickers):
+        time.sleep(0.5)
         pbar.progress((i + 1) / len(target_tickers))
         try:
-            df = yf.Ticker(t).history(period="6mo")
+           ticker_obj = yf.Ticker(t, session=session)
+df = ticker_obj.history(period="6mo")
             if df.empty or len(df) < 2:
                 continue
             curr_p = df["Close"].iloc[-1]
