@@ -7,11 +7,23 @@ import os
 from datetime import datetime
 import pytz
 import time
+import requests
 import requests_cache
-from requests import Session
-from requests_cache import CacheMixin, SQLiteCache
-from requests_ratelimiter import LimiterMixin, LimiterSession
+from requests_ratelimiter import LimiterSession
 from pyrate_limiter import Duration, RequestRate, Limiter
+
+# Setup Session untuk menghindari Rate Limit Yahoo Finance
+# Kita batasi 2 request per detik agar aman
+rate = RequestRate(2, Duration.SECOND)
+limiter = Limiter(rate)
+session = LimiterSession(limiter=limiter)
+
+# Tambahkan cache agar data tidak ditarik berulang kali dalam 1 jam
+session = requests_cache.CachedSession(
+    'yfinance_cache',
+    session=session,
+    expire_after=3600
+)
 
 # Membuat session yang memiliki cache dan pembatas kecepatan
 class CachedLimiterSession(CacheMixin, LimiterMixin, Session):
@@ -111,7 +123,9 @@ def get_advanced_analysis(df, ihsg_df):
 # --- 3. DATA LOADING ---
 @st.cache_data(ttl=60)
 def fetch_market_data():
-    return yf.Ticker("^JKSE").history(period="6mo")
+    # Menggunakan session agar tidak terkena cekal
+    ticker_ihsg = yf.Ticker("^JKSE", session=session)
+    return ticker_ihsg.history(period="6mo")
 
 
 ihsg_data = fetch_market_data()
