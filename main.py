@@ -7,6 +7,22 @@ import os
 from datetime import datetime
 import pytz
 import time
+import requests_cache
+from requests import Session
+from requests_cache import CacheMixin, SQLiteCache
+from requests_ratelimiter import LimiterMixin, LimiterSession
+from pyrate_limiter import Duration, RequestRate, Limiter
+
+# Membuat session yang memiliki cache dan pembatas kecepatan
+class CachedLimiterSession(CacheMixin, LimiterMixin, Session):
+    pass
+
+session = CachedLimiterSession(
+    limiter=Limiter(RequestRate(2, Duration.SECOND)), # Maks 2 request per detik
+    bucket_class=SQLiteCache,
+    cache_name="yfinance_cache",
+    expire_after=3600 # Cache disimpan selama 1 jam
+)
 
 # --- 1. SETUP UI & STYLE ---
 st.set_page_config(page_title="JABAT CUAN PRO", layout="wide")
