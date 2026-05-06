@@ -4,5 +4,3 @@ pandas
 plotly
 pytz
 requests-cache
-requests-ratelimiter
-pyrate-limiter
