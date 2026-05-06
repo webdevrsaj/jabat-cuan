@@ -149,47 +149,48 @@ if run or search_ticker or enable_auto:
     results, summary_list, potential_alerts = [], [], []
     count_above_ma = 0
 
+    # --- PROSES PEMINDAIAN DENGAN SESSION & DELAY ---
     pbar = st.progress(0)
     for i, t in enumerate(target_tickers):
-        time.sleep(0.5)
         pbar.progress((i + 1) / len(target_tickers))
+        time.sleep(0.5)  # Jeda 0.5 detik agar tidak kena Rate Limit lagi
+        
         try:
-           ticker_obj = yf.Ticker(t, session=session)
-df = ticker_obj.history(period="6mo")
-            if df.empty or len(df) < 2:
+            # Menggunakan session (dari solusi sebelumnya) untuk bypass rate limit
+            ticker_obj = yf.Ticker(t, session=session) 
+            df = ticker_obj.history(period="6mo")
+            
+            if df.empty or len(df) < 2: 
                 continue
+                
             curr_p = df["Close"].iloc[-1]
-            if not (min_p <= curr_p <= max_p):
+            if not (min_p <= curr_p <= max_p): 
                 continue
-
+            
             an = get_advanced_analysis(df, ihsg_data)
-            if not an:
+            if not an: 
                 continue
-            if an["above_ma20"]:
+                
+            if an['above_ma20']: 
                 count_above_ma += 1
-
+            
+            # Kalkulasi Skor
             score = 0
-            if an["above_ma20"]:
-                score += 40
-            if an["rvol"] > 1.5:
-                score += 30
-            if an["rs"] > 1.05:
-                score += 20
-            if an["weekly_up"]:
-                score += 10
-
-            stock_data = {
-                "sym": t.replace(".JK", ""),
-                "p": curr_p,
-                "sc": score,
-                "an": an,
-                "df": df,
-            }
+            if an['above_ma20']: score += 40
+            if an['rvol'] > 1.5: score += 30
+            if an['rs'] > 1.05: score += 20
+            if an['weekly_up']: score += 10
+            
+            stock_data = {"sym": t.replace(".JK",""), "p": curr_p, "sc": score, "an": an, "df": df}
             results.append(stock_data)
-            if score >= 80:
-                potential_alerts.append(stock_data["sym"])
-        except:
-            continue
+            
+            if score >= 80: 
+                potential_alerts.append(stock_data['sym'])
+                
+        except Exception as e:
+            # Jika ada error pada satu saham, lewati ke saham berikutnya
+            continue 
+            
     pbar.empty()
 
     if potential_alerts:
