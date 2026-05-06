@@ -4,16 +4,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import os
-import requests
-import requests_cache
+import time
 from datetime import datetime
 import pytz
-import time
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # --- 1. SETUP UI & STYLE ---
-st.set_page_config(page_title="JABAT CUAN PRO v17.6", layout="wide")
+st.set_page_config(page_title="JABAT CUAN PRO v17.7", layout="wide")
 
 st.markdown(
     """
@@ -54,19 +50,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- 2. CORE FUNCTIONS & SESSION SETUP ---
-@st.cache_resource
-def get_safe_session():
-    session = requests_cache.CachedSession('yfinance_cache', expire_after=3600)
-    retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-    session.mount('https://', HTTPAdapter(max_retries=retries))
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
-    return session
-
-session = get_safe_session()
-
+# --- 2. CORE FUNCTIONS ---
 def play_alert_sound():
     audio_html = """<audio autoplay><source src="https://www.soundjay.com/buttons/beep-01a.mp3" type="audio/mpeg"></audio>"""
     st.components.v1.html(audio_html, height=0)
@@ -75,43 +59,57 @@ def get_advanced_analysis(df, ihsg_df):
     try:
         if len(df) < 40 or ihsg_df.empty:
             return None
+        
+        # Kalkulasi ATR (Average True Range)
         tr = pd.concat([
             df["High"] - df["Low"],
             abs(df["High"] - df["Close"].shift()),
             abs(df["Low"] - df["Close"].shift()),
         ], axis=1).max(axis=1)
-        
         atr = tr.rolling(14).mean().iloc[-1]
+        
+        # Moving Average
         ma20 = df["Close"].rolling(20).mean().iloc[-1]
         curr_p = df["Close"].iloc[-1]
         
+        # Relative Volume
         avg_vol = df["Volume"].rolling(20).mean().iloc[-1]
         rvol = df["Volume"].iloc[-1] / avg_vol if avg_vol > 0 else 1.0
 
+        # Relative Strength (RS) terhadap IHSG
         rs = (df["Close"].iloc[-1] / df["Close"].iloc[-20]) / (
             ihsg_df["Close"].iloc[-1] / ihsg_df["Close"].iloc[-20]
         )
+        
         return {
             "atr": atr, "rvol": rvol, "rs": rs, "ma20": ma20,
             "above_ma20": curr_p > ma20,
             "weekly_up": curr_p > df["Close"].iloc[-20],
+            "change_pct": ((curr_p - df["Close"].iloc[-2]) / df["Close"].iloc[-2]) * 100
         }
     except:
         return None
 
 # --- 3. DATA LOADING ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)
 def fetch_market_data():
-    return yf.Ticker("^JKSE", session=session).history(period="6mo")
+    # Menggunakan mesin otomatis yfinance (Compatible with curl_cffi)
+    return yf.Ticker("^JKSE").history(period="6mo")
 
+# Load IHSG Data
 ihsg_data = fetch_market_data()
+
+# Load CSV Ticker
 csv_path = "saham.csv"
 if os.path.exists(csv_path):
-    df_csv = pd.read_csv(csv_path, header=None)
-    tickers = [
-        (f"{s.strip().upper()}.JK" if not s.strip().endswith(".JK") else s.strip().upper())
-        for s in df_csv[0].dropna()
-    ]
+    try:
+        df_csv = pd.read_csv(csv_path, header=None)
+        tickers = [
+            (f"{s.strip().upper()}.JK" if not s.strip().endswith(".JK") else s.strip().upper())
+            for s in df_csv[0].dropna()
+        ]
+    except:
+        tickers = ["BBRI.JK", "BMRI.JK", "TLKM.JK"]
 else:
     tickers = ["BBRI.JK", "BMRI.JK", "TLKM.JK", "ASII.JK", "BBNI.JK", "BRMS.JK"]
 
@@ -123,27 +121,31 @@ with st.sidebar:
     risk_per_trade = st.slider("🛡️ Risiko (Loss) per Trade (%)", 0.1, 5.0, 1.0)
     st.divider()
     min_p = st.number_input("📉 Min Price", value=50)
-    max_p = st.number_input("📈 Max Price", value=100000) # Diperbaiki dari 80 ke 100.000
+    max_p = st.number_input("📈 Max Price", value=100000)
     st.divider()
     enable_auto = st.toggle("🛰️ Auto-Pilot Mode")
     refresh_int = st.select_slider("Refresh (Menit)", options=[1, 5, 10, 30], value=5)
     run = st.button("🚀 MULAI SCAN", use_container_width=True)
 
 # --- 5. MAIN LOGIC ---
-if run or search_ticker or (enable_auto and "last_run" not in st.session_state):
+if run or search_ticker or enable_auto:
     target_tickers = [f"{search_ticker}.JK"] if search_ticker else tickers
-    results, summary_list, potential_alerts = [], [], []
+    results, potential_alerts = [], []
     count_above_ma = 0
 
     pbar = st.progress(0)
+    status_text = st.empty()
+
     for i, t in enumerate(target_tickers):
         pbar.progress((i + 1) / len(target_tickers))
-        time.sleep(0.1) # Jeda tipis agar tidak kena rate limit
+        status_text.text(f"Memeriksa {t}...")
+        
         try:
-            ticker_obj = yf.Ticker(t, session=session)
-            df = ticker_obj.history(period="6mo")
+            # Mengambil data tanpa session manual (Let YF handle impersonation)
+            stock_obj = yf.Ticker(t)
+            df = stock_obj.history(period="6mo")
             
-            if df.empty or len(df) < 5:
+            if df.empty or len(df) < 20:
                 continue
                 
             curr_p = df["Close"].iloc[-1]
@@ -157,26 +159,31 @@ if run or search_ticker or (enable_auto and "last_run" not in st.session_state):
             if an["above_ma20"]:
                 count_above_ma += 1
 
+            # Scoring System
             score = 0
             if an["above_ma20"]: score += 40
             if an["rvol"] > 1.5: score += 30
             if an["rs"] > 1.05: score += 20
             if an["weekly_up"]: score += 10
 
-            stock_data = {
+            results.append({
                 "sym": t.replace(".JK", ""),
                 "p": curr_p,
                 "sc": score,
                 "an": an,
-                "df": df,
-            }
-            results.append(stock_data)
+                "df": df
+            })
+            
             if score >= 80:
-                potential_alerts.append(stock_data["sym"])
-        except Exception as e:
+                potential_alerts.append(t.replace(".JK", ""))
+                
+            # Jeda pendek agar Yahoo tidak curiga
+            time.sleep(0.2)
+        except:
             continue
             
     pbar.empty()
+    status_text.empty()
 
     if potential_alerts:
         play_alert_sound()
@@ -208,35 +215,22 @@ if run or search_ticker or (enable_auto and "last_run" not in st.session_state):
             unsafe_allow_html=True,
         )
 
-        st.subheader("🎯 The Beast Radar (Selection Matrix)")
-        radar_data = []
-        for i in results:
-            radar_data.append({
-                "Ticker": i["sym"],
-                "Score": i["sc"],
-                "RS": i["an"]["rs"],
-                "Volume": i["an"]["rvol"] if (i["an"]["rvol"] > 0 and not pd.isna(i["an"]["rvol"])) else 0.1
-            })
-        
-        radar_df = pd.DataFrame(radar_data)
+        # Radar Chart
+        radar_df = pd.DataFrame([
+            {"Ticker": r["sym"], "Score": r["sc"], "RS": r["an"]["rs"], "Volume": r["an"]["rvol"]}
+            for r in results
+        ])
+        fig_radar = px.scatter(
+            radar_df, x="RS", y="Score", size="Volume", text="Ticker",
+            color="Score", color_continuous_scale="Viridis", height=450, size_max=40
+        )
+        fig_radar.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig_radar, use_container_width=True)
 
-        if not radar_df.empty:
-            radar_df["Score"] = radar_df["Score"].fillna(0)
-            radar_df["RS"] = radar_df["RS"].fillna(1.0)
-
-            fig_radar = px.scatter(
-                radar_df, x="RS", y="Score", size="Volume", text="Ticker",
-                color="Score", color_continuous_scale="Viridis",
-                height=400, size_max=40,
-            )
-            fig_radar.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig_radar, use_container_width=True)
         st.divider()
 
+        # Kartu Detail Saham
+        summary_list = []
         for item in sorted(results, key=lambda x: x["sc"], reverse=True):
             status_color = "#10b981" if item["sc"] >= 80 else ("#3b82f6" if item["sc"] >= 60 else "#64748b")
 
@@ -255,25 +249,24 @@ if run or search_ticker or (enable_auto and "last_run" not in st.session_state):
             c1, c2, c3 = st.columns([2, 1, 1.2])
             with c1:
                 fig = go.Figure(data=[go.Candlestick(
-                    x=item["df"].index[-60:],
-                    open=item["df"]["Open"][-60:], high=item["df"]["High"][-60:],
-                    low=item["df"]["Low"][-60:], close=item["df"]["Close"][-60:],
+                    x=item["df"].index[-60:], open=item["df"]["Open"][-60:],
+                    high=item["df"]["High"][-60:], low=item["df"]["Low"][-60:],
+                    close=item["df"]["Close"][-60:],
+                    increasing_line_color='#10b981', decreasing_line_color='#ef4444'
                 )])
-                fig.update_layout(
-                    xaxis_rangeslider_visible=False, height=250,
-                    margin=dict(l=0, r=0, t=0, b=0), template="plotly_dark",
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig, use_container_width=True, key=f"ch_{item['sym']}")
+                fig.update_layout(xaxis_rangeslider_visible=False, height=280, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig, use_container_width=True, key=f"chart_{item['sym']}")
+
             with c2:
                 st.markdown(
                     f"""
-                    <div class="metric-pill"><small>Rel. Strength</small><br><b>{item['an']['rs']:.2f}</b></div>
-                    <div class="metric-pill"><small>Whale Vol</small><br><b>{item['an']['rvol']:.2f}x</b></div>
-                    <div class="metric-pill"><small>Trend</small><br><b style="color:{status_color}">{"UPTREND" if item['an']['above_ma20'] else "SIDEWAYS"}</b></div>
+                    <div class="metric-pill"><small>Relative Strength</small><br><b>{item['an']['rs']:.2f}</b></div>
+                    <div class="metric-pill"><small>Relative Vol</small><br><b>{item['an']['rvol']:.2f}x</b></div>
+                    <div class="metric-pill"><small>Daily Chg</small><br><b style="color:{'#10b981' if item['an']['change_pct']>0 else '#ef4444'}">{item['an']['change_pct']:.2f}%</b></div>
                     """,
                     unsafe_allow_html=True,
                 )
+
             with c3:
                 entry_p = item["p"]
                 sl_p = entry_p - (1.5 * item["an"]["atr"])
@@ -296,16 +289,17 @@ if run or search_ticker or (enable_auto and "last_run" not in st.session_state):
                 )
                 if item["sc"] >= 60:
                     summary_list.append([item["sym"], int(entry_p), int(tp_p), int(sl_p), lot_size])
-            st.divider()
 
         if summary_list:
-            st.subheader("📋 Rekapitulasi Rencana Trading")
-            st.table(pd.DataFrame(summary_list, columns=["Ticker", "Harga Entry", "Target (TP)", "Proteksi (SL)", "Jumlah Lot"]))
+            st.subheader("📋 Rekap Rencana Trading")
+            st.table(pd.DataFrame(summary_list, columns=["Ticker", "Entry", "TP", "SL", "Lot"]))
 
     if enable_auto:
         time.sleep(refresh_int * 60)
         st.rerun()
+
 else:
+    # Welcome Screen
     st.markdown(
         """
         <div class="welcome-container">
@@ -314,8 +308,8 @@ else:
             <p style="font-size: 20px; color: #94a3b8;">The Professional Grade Intelligence Scanner</p>
             <div style="max-width: 600px; margin: 0 auto; text-align: left; background: #1e293b; padding: 25px; border-radius: 15px;">
                 <p>✅ <b>Real-time Entry:</b> Harga beli sesuai data market terakhir.</p>
-                <p>✅ <b>Smart Protection:</b> Stop Loss dinamis berbasis volatilitas (ATR).</p>
-                <p>✅ <b>Money Management:</b> Menghitung Lot agar risiko modal tetap terjaga.</p>
+                <p>✅ <b>Smart Protection:</b> Stop Loss dinamis berbasis ATR.</p>
+                <p>✅ <b>Auto Impersonation:</b> Bypass blokir Yahoo Finance v0.2.50+.</p>
             </div>
             <p style="margin-top: 30px; color: #475569;">Created by Sondang Gloria Sijabat</p>
         </div>
@@ -326,12 +320,11 @@ else:
 # --- 6. FOOTER ---
 tz = pytz.timezone("Asia/Jakarta")
 now = datetime.now(tz)
-hari_list = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 st.markdown(
     f"""
     <div style="height: 100px;"></div>
     <div class="footer">
-        {hari_list[now.weekday()]}, {now.strftime("%d-%m-%Y | %H:%M:%S")} WIB | 
+        {now.strftime("%A, %d-%m-%Y | %H:%M:%S")} WIB | 
         Sistem: {"AUTOPILOT" if enable_auto else "MANUAL"} | 
         Author: <b>Sondang Gloria Sijabat</b>
     </div>
