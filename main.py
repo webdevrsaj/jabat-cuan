@@ -121,7 +121,7 @@ with st.sidebar:
     risk_per_trade = st.slider("🛡️ Risiko (Loss) per Trade (%)", 0.1, 5.0, 1.0)
     st.divider()
     min_p = st.number_input("📉 Min Price", value=50)
-    max_p = st.number_input("📈 Max Price", value=100000)
+    max_p = st.number_input("📈 Max Price", value=80)
     st.divider()
     enable_auto = st.toggle("🛰️ Auto-Pilot Mode")
     refresh_int = st.select_slider("Refresh (Menit)", options=[1, 5, 10, 30], value=5)
